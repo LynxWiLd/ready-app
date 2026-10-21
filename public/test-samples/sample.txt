@@ -1,0 +1,7 @@
+Texto plano de prueba
+
+Este archivo sirve para verificar el lector de texto y el guardado de progreso por desplazamiento.
+
+Párrafo tres.
+Párrafo cuatro.
+Párrafo cinco con más contenido para generar scroll.

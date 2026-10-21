@@ -1,0 +1,33 @@
+{
+  "name": "ready-app",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Lector de libros y documentos Local-First (EPUB, PDF, TXT/Markdown)",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "eslint src --ext .js,.jsx"
+  },
+  "dependencies": {
+    "dexie": "^4.4.6",
+    "dompurify": "^3.4.17",
+    "epubjs": "^0.3.93",
+    "jszip": "^3.10.2",
+    "lucide-react": "^0.454.0",
+    "marked": "^14.1.4",
+    "pdfjs-dist": "^4.10.38",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.30.6"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.7.0",
+    "autoprefixer": "^10.6.1",
+    "postcss": "^8.5.31",
+    "tailwindcss": "^3.4.19",
+    "vite": "^5.4.21",
+    "vite-plugin-pwa": "^0.21.2"
+  }
+}
