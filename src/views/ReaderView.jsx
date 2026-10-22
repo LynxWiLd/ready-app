@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Bookmark, StickyNote, Settings2, AlertTriangle, Loader2, Eye, ListTree } from 'lucide-react';
+import {
+  ArrowLeft,
+  Bookmark,
+  StickyNote,
+  Settings2,
+  AlertTriangle,
+  Loader2,
+  Eye,
+  ListTree,
+  Search
+} from 'lucide-react';
 import { getBook, getProgress, saveProgress as saveProgressDb, touchOpened } from '../services/db.js';
 import {
   listBookmarks,
@@ -11,6 +21,7 @@ import {
 } from '../services/bookmarks.js';
 import { useReaderSettings } from '../hooks/useReaderSettings.js';
 import { useToasts } from '../hooks/useToasts.js';
+import { useDebouncedValue } from '../hooks/useDebouncedValue.js';
 import EpubReader from '../components/EpubReader.jsx';
 import PdfReader from '../components/PdfReader.jsx';
 import TextReader from '../components/TextReader.jsx';
@@ -18,6 +29,7 @@ import { SettingsPanel } from '../components/SettingsPanel.jsx';
 import { BookmarksPanel } from '../components/BookmarksPanel.jsx';
 import { NotesPanel } from '../components/NotesPanel.jsx';
 import { TocPanel } from '../components/TocPanel.jsx';
+import { SearchPanel } from '../components/SearchPanel.jsx';
 import { ToastContainer } from '../components/Toast.jsx';
 import { formatPercent } from '../utils/format.js';
 
@@ -35,11 +47,16 @@ export function ReaderView() {
   const [notes, setNotes] = useState([]);
   const [ready, setReady] = useState(false);
   const [loadError, setLoadError] = useState(null);
-  const [panel, setPanel] = useState(null); // 'toc' | 'bookmarks' | 'notes' | 'settings'
+  const [panel, setPanel] = useState(null); // 'toc' | 'search' | 'bookmarks' | 'notes' | 'settings'
   const [toc, setToc] = useState([]);
   const [activeTocIndex, setActiveTocIndex] = useState(null);
   const [uiVisible, setUiVisible] = useState(true);
   const [positionLabel, setPositionLabel] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState(null);
+  const debouncedSearch = useDebouncedValue(searchQuery, 350);
 
   const readerRef = useRef(null);
   const locationRef = useRef({});
@@ -54,6 +71,11 @@ export function ReaderView() {
     setLoadError(null);
     setToc([]);
     setActiveTocIndex(null);
+    setSearchQuery('');
+    setSearchResults([]);
+    setSearching(false);
+    setSearchError(null);
+    setPanel(null);
     (async () => {
       try {
         // El progreso se carga ANTES de montar el lector: los readers reciben
@@ -114,6 +136,42 @@ export function ReaderView() {
     [persist]
   );
 
+  // ---------------- Búsqueda dentro del libro ----------------
+  useEffect(() => {
+    if (panel !== 'search' || !ready) return undefined;
+    const q = debouncedSearch.trim();
+    if (q.length < 2) {
+      setSearchResults([]);
+      setSearching(false);
+      setSearchError(null);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    let alive = true;
+    setSearching(true);
+    setSearchError(null);
+
+    (async () => {
+      try {
+        const found = await readerRef.current?.search?.(q, { signal: controller.signal });
+        if (!alive || controller.signal.aborted) return;
+        setSearchResults(Array.isArray(found) ? found : []);
+      } catch (err) {
+        if (!alive || controller.signal.aborted) return;
+        setSearchResults([]);
+        setSearchError(err?.message || 'No se pudo buscar en el libro.');
+      } finally {
+        if (alive && !controller.signal.aborted) setSearching(false);
+      }
+    })();
+
+    return () => {
+      alive = false;
+      controller.abort();
+    };
+  }, [panel, ready, debouncedSearch, book?.id]);
+
   // Vaciar al salir / desmontar
   useEffect(() => {
     return () => {
@@ -126,6 +184,19 @@ export function ReaderView() {
   // ---------------- Navegación por teclado (RF-03) ----------------
   useEffect(() => {
     const onKey = (e) => {
+      // Ctrl/⌘+F abre la búsqueda interna (nunca el buscador del navegador).
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        setUiVisible(true);
+        setPanel('search');
+        return;
+      }
+      if (e.key === 'Escape' && panel) {
+        e.preventDefault();
+        setPanel(null);
+        return;
+      }
+
       const tag = e.target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable) return;
       switch (e.key) {
@@ -155,7 +226,7 @@ export function ReaderView() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [navigate]);
+  }, [navigate, panel]);
 
   // ---------------- UI auto-ocultable ----------------
   useEffect(() => {
@@ -294,6 +365,13 @@ export function ReaderView() {
             {positionLabel ? ` · ${positionLabel}` : percent ? ` · ${formatPercent(percent)}` : ''}
           </p>
         </div>
+        <button
+          className={`reader-tool-btn ${panel === 'search' ? 'is-active' : ''}`}
+          onClick={() => setPanel(panel === 'search' ? null : 'search')}
+          title="Buscar en el libro"
+        >
+          <Search className="h-5 w-5" />
+        </button>
         {toc.length > 0 && (
           <button
             className={`reader-tool-btn ${panel === 'toc' ? 'is-active' : ''}`}
@@ -404,6 +482,17 @@ export function ReaderView() {
         {/* Panel lateral */}
         {panel && (
           <aside className="absolute inset-y-0 right-0 z-30 w-full max-w-sm border-l border-ink-100 bg-white shadow-2xl animate-slide-up">
+            {panel === 'search' && (
+              <SearchPanel
+                query={searchQuery}
+                onQueryChange={setSearchQuery}
+                results={searchResults}
+                searching={searching}
+                error={searchError}
+                onJump={jumpToItem}
+                onClose={() => setPanel(null)}
+              />
+            )}
             {panel === 'toc' && (
               <TocPanel
                 toc={toc}

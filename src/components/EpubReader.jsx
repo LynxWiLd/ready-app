@@ -1,7 +1,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef } from 'react';
 import ePub from 'epubjs';
 import { useDebouncedValue } from '../hooks/useDebouncedValue.js';
-import { buildTocList, buildTocIndex } from '../services/epub.js';
+import { buildTocList, buildTocIndex, searchEpub } from '../services/epub.js';
 
 const FONT_STACKS = {
   sans: 'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
@@ -157,6 +157,7 @@ const EpubReader = forwardRef(function EpubReader(
       }
       return Promise.resolve();
     },
+    search: (query, options) => searchEpub(bookRef.current, query, options),
     getCurrent: () => renditionRef.current?.currentLocation?.() || null
   }));
 

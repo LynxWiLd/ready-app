@@ -1,5 +1,6 @@
 import ePubModule from 'epubjs';
 import { truncate } from '../utils/format.js';
+import { excerptAround, foldForSearch, foldQuery, searchLimit } from '../utils/search.js';
 
 // Normaliza el interop CJS/ESM de epubjs (Vite usa el build ESM, Node el CJS).
 const ePub = typeof ePubModule === 'function' ? ePubModule : ePubModule.default || ePubModule;
@@ -153,6 +154,123 @@ export function buildTocIndex(flat) {
     bySpineIndex.set(item.spineIndex, i);
   });
   return bySpineIndex;
+}
+
+/**
+ * Concatena los nodos de texto del capítulo y busca sobre el texto plegado
+ * (sin tildes ni mayúsculas). Así una consulta puede cruzar etiquetas inline
+ * y las tildes no impiden encontrar la coincidencia.
+ */
+function searchSection(section, document, query, max, results, seen, signal) {
+  const root = document.body || document.documentElement;
+  if (!root) return;
+
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  const starts = [];
+  let combined = '';
+  let node;
+
+  while ((node = walker.nextNode())) {
+    const value = node.nodeValue || '';
+    if (!value) continue;
+    nodes.push(node);
+    starts.push(combined.length);
+    combined += value;
+  }
+  if (!combined) return;
+
+  const folded = foldForSearch(combined);
+  const locate = (index) => {
+    let lo = 0;
+    let hi = starts.length - 1;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (starts[mid] <= index) lo = mid;
+      else hi = mid - 1;
+    }
+    return { node: nodes[lo], offset: index - starts[lo] };
+  };
+
+  let from = 0;
+  while (results.length < max) {
+    if (signal?.aborted) return;
+    const at = folded.text.indexOf(query, from);
+    if (at === -1) break;
+
+    const combinedStart = folded.map[at];
+    const combinedEnd = folded.map[at + query.length - 1] + 1;
+    const start = locate(combinedStart);
+    const last = locate(combinedEnd - 1);
+
+    try {
+      const range = document.createRange();
+      range.setStart(start.node, start.offset);
+      range.setEnd(last.node, last.offset + 1);
+      const cfi = section.cfiFromRange(range);
+      if (cfi && !seen.has(cfi)) {
+        seen.add(cfi);
+        results.push({
+          id: `epub-${results.length}`,
+          cfi,
+          excerpt: excerptAround(combined, combinedStart, combinedEnd)
+        });
+      }
+    } catch {
+      /* rango no representable; continuar */
+    }
+
+    from = at + query.length;
+  }
+}
+
+/**
+ * Busca una cadena en todos los capítulos de la spine.
+ * `section.load()` permite analizar capítulos que aún no se han mostrado.
+ * @returns {Promise<Array<{id: string, cfi: string, excerpt: string}>>}
+ */
+export async function searchEpub(book, query, { limit = 100, signal } = {}) {
+  const q = foldQuery(query);
+  if (q.length < 2 || typeof book?.load !== 'function') return [];
+  const sections = book?.spine?.spineItems || [];
+  if (!sections.length) return [];
+
+  const max = searchLimit(limit);
+  const load = book.load.bind(book);
+  const seen = new Set();
+  const results = [];
+
+  for (const section of sections) {
+    if (signal?.aborted || results.length >= max) break;
+    let loaded = false;
+    try {
+      await section.load(load);
+      loaded = true;
+      const document = section.document || section.contents?.ownerDocument;
+      if (!document) continue;
+
+      // Algunos capítulos ya renderizados no exponen `document` directamente.
+      const previousDocument = section.document;
+      if (!previousDocument) section.document = document;
+      try {
+        searchSection(section, document, q, max, results, seen, signal);
+      } finally {
+        if (!previousDocument) section.document = undefined;
+      }
+    } catch {
+      /* capítulo no legible; continuar con el resto */
+    } finally {
+      if (loaded) {
+        try {
+          section.unload();
+        } catch {
+          /* noop */
+        }
+      }
+    }
+  }
+
+  return results;
 }
 
 /**

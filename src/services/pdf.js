@@ -2,6 +2,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { titleFromFile, clean } from './epub.js';
 import { truncate } from '../utils/format.js';
+import { excerptAround, foldForSearch, foldQuery, searchLimit } from '../utils/search.js';
 
 // El worker se sirve como asset local (Vite) — nunca se descarga de CDN (RNF-01).
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
@@ -105,6 +106,62 @@ export async function getPdfOutline(doc) {
   return raw
     .map((entry, i) => ({ label: entry.label, page: pages[i], depth: entry.depth }))
     .filter((entry) => Number.isInteger(entry.page) && entry.page > 0);
+}
+
+/**
+ * Busca una cadena en el texto de todas las páginas.
+ * `cache` (Map página → texto) evita reextraer el texto en cada búsqueda.
+ * @returns {Promise<Array<{id: string, page: number, excerpt: string}>>}
+ */
+export async function searchPdf(doc, query, { limit = 100, signal, cache } = {}) {
+  const q = foldQuery(query);
+  if (!doc || q.length < 2) return [];
+
+  const max = searchLimit(limit);
+  const results = [];
+  const pages = doc.numPages || 0;
+
+  for (let pageNum = 1; pageNum <= pages; pageNum++) {
+    if (signal?.aborted || results.length >= max) break;
+
+    let entry = cache?.get(pageNum);
+    if (!entry) {
+      try {
+        const page = await doc.getPage(pageNum);
+        const content = await page.getTextContent();
+        let raw = '';
+        for (const item of content.items || []) {
+          raw += `${item.str || ''} `;
+        }
+        // Los saltos de línea del PDF se tratan como espacios para que una
+        // frase pueda encontrarse aunque esté partida entre líneas.
+        raw = raw.replace(/\s+/g, ' ').trim();
+        const folded = foldForSearch(raw);
+        entry = { raw, folded: folded.text, map: folded.map };
+        cache?.set(pageNum, entry);
+      } catch {
+        if (signal?.aborted) break;
+        continue;
+      }
+    }
+    if (signal?.aborted) break;
+
+    let from = 0;
+    while (results.length < max) {
+      const at = entry.folded.indexOf(q, from);
+      if (at === -1) break;
+      const start = entry.map[at];
+      const end = entry.map[at + q.length - 1] + 1;
+      results.push({
+        id: `pdf-${pageNum}-${at}`,
+        page: pageNum,
+        excerpt: excerptAround(entry.raw, start, end, 50)
+      });
+      from = at + q.length;
+    }
+  }
+
+  return results;
 }
 
 /**

@@ -1,6 +1,6 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { TextLayer } from 'pdfjs-dist';
-import { openPdf, getPdfOutline } from '../services/pdf.js';
+import { openPdf, getPdfOutline, searchPdf } from '../services/pdf.js';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 const GAP = 24;
@@ -21,6 +21,7 @@ const PdfReader = forwardRef(function PdfReader(
   const textLayerRefs = useRef(new Map());
   const textLayersRef = useRef(new Map());
   const renderTokensRef = useRef(new Map());
+  const searchCacheRef = useRef(new Map());
   const [outline, setOutline] = useState([]);
   const [numPages, setNumPages] = useState(0);
   const [currentPage, setCurrentPage] = useState(initialPage);
@@ -83,6 +84,7 @@ const PdfReader = forwardRef(function PdfReader(
         }
       }
       textLayersRef.current.clear();
+      searchCacheRef.current.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blob]);
@@ -332,7 +334,9 @@ const PdfReader = forwardRef(function PdfReader(
     prev: () => goToPage(currentPage - (view === 'double' ? 2 : 1)),
     goTo: (target) => {
       if (target?.page) goToPage(target.page);
-    }
+    },
+    search: (query, options) =>
+      searchPdf(docRef.current, query, { ...options, cache: searchCacheRef.current })
   }));
 
   // Saltos solicitados desde marcadores / notas
