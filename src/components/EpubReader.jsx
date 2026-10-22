@@ -1,7 +1,8 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import ePub from 'epubjs';
 import { useDebouncedValue } from '../hooks/useDebouncedValue.js';
 import { buildTocList, buildTocIndex, searchEpub } from '../services/epub.js';
+import { getHighlightColor, getHighlightColorName } from '../utils/highlights.js';
 
 const FONT_STACKS = {
   sans: 'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
@@ -34,7 +35,7 @@ function buildThemeCSS(settings) {
  * Expone next/prev/goTo y notifica la posición actual.
  */
 const EpubReader = forwardRef(function EpubReader(
-  { blob, settings, initialCfi, onLocation, onReady, onJump },
+  { blob, settings, initialCfi, onLocation, onReady, onJump, onSelect, highlights = [] },
   ref
 ) {
   const containerRef = useRef(null);
@@ -43,6 +44,10 @@ const EpubReader = forwardRef(function EpubReader(
   const readyRef = useRef(false);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
+  const appliedHighlightsRef = useRef(new Map());
+  const [renditionReady, setRenditionReady] = useState(false);
 
   const applySettings = useCallback((rendition, s) => {
     if (!rendition) return;
@@ -59,6 +64,7 @@ const EpubReader = forwardRef(function EpubReader(
     let book;
     let tocList = [];
     const tocIndexBySpine = new Map();
+    setRenditionReady(false);
 
     const init = async () => {
       try {
@@ -75,6 +81,40 @@ const EpubReader = forwardRef(function EpubReader(
           allowScriptedContent: true
         });
         renditionRef.current = rendition;
+
+        // Selección de texto dentro del iframe: propone crear un resaltado.
+        rendition.on('selected', (cfiRange, contents) => {
+          let text = '';
+          let rect = null;
+          try {
+            const selection = contents.window.getSelection();
+            text = selection?.toString() || '';
+            const range =
+              selection && selection.rangeCount > 0
+                ? selection.getRangeAt(0)
+                : contents.range(cfiRange);
+            const r = range?.getBoundingClientRect();
+            const frame = contents.document?.defaultView?.frameElement?.getBoundingClientRect();
+            if (r && frame) {
+              rect = {
+                x: frame.left + r.left,
+                y: frame.top + r.top,
+                width: r.width,
+                height: r.height
+              };
+            }
+          } catch {
+            /* selección no disponible */
+          }
+          text = text.trim();
+          if (!text) return;
+          onSelectRef.current?.({
+            text: text.slice(0, 2000),
+            cfi: cfiRange,
+            rect,
+            source: 'epub'
+          });
+        });
 
         // TOC navegable (awaited junto con el resto de la carga)
         try {
@@ -116,6 +156,7 @@ const EpubReader = forwardRef(function EpubReader(
         }
         if (cancelled) return;
         readyRef.current = true;
+        setRenditionReady(true);
         onReady?.({ spineCount: book.spine?.length || 0, toc: tocList });
       } catch (err) {
         if (!cancelled) onReady?.({ error: err?.message || 'No se pudo abrir el EPUB.' });
@@ -138,9 +179,60 @@ const EpubReader = forwardRef(function EpubReader(
       }
       renditionRef.current = null;
       bookRef.current = null;
+      appliedHighlightsRef.current.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blob]);
+
+  // Sincronizar resaltados con las anotaciones internas de epub.js.
+  useEffect(() => {
+    const rendition = renditionRef.current;
+    if (!rendition || !renditionReady) return;
+
+    const applied = appliedHighlightsRef.current;
+
+    for (const [id, entry] of applied) {
+      const current = highlights.find((h) => h.id === id);
+      if (!current || current.cfi !== entry.cfi) {
+        try {
+          rendition.annotations.remove(entry.cfi, 'highlight');
+        } catch {
+          /* noop */
+        }
+        applied.delete(id);
+      }
+    }
+
+    for (const highlight of highlights) {
+      if (!highlight.cfi) continue;
+      const colorName = getHighlightColorName(highlight.color);
+      const current = applied.get(highlight.id);
+      if (current && current.cfi === highlight.cfi && current.color === colorName) continue;
+
+      if (current) {
+        try {
+          rendition.annotations.remove(current.cfi, 'highlight');
+        } catch {
+          /* noop */
+        }
+        applied.delete(highlight.id);
+      }
+
+      try {
+        const color = getHighlightColor(colorName);
+        rendition.annotations.highlight(
+          highlight.cfi,
+          { id: highlight.id },
+          undefined,
+          `ready-hl-${colorName}`,
+          { fill: color.hex, 'fill-opacity': '0.45', 'mix-blend-mode': 'multiply' }
+        );
+        applied.set(highlight.id, { cfi: highlight.cfi, color: colorName });
+      } catch {
+        /* CFI no representable en este capítulo */
+      }
+    }
+  }, [highlights, renditionReady]);
 
   // Aplicar cambios de estilo en caliente
   useEffect(() => {
@@ -158,6 +250,15 @@ const EpubReader = forwardRef(function EpubReader(
       return Promise.resolve();
     },
     search: (query, options) => searchEpub(bookRef.current, query, options),
+    clearSelection: () => {
+      try {
+        renditionRef.current?.getContents?.().forEach((contents) => {
+          contents.window?.getSelection?.()?.removeAllRanges();
+        });
+      } catch {
+        /* noop */
+      }
+    },
     getCurrent: () => renditionRef.current?.currentLocation?.() || null
   }));
 

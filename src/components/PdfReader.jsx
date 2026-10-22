@@ -1,9 +1,31 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { TextLayer } from 'pdfjs-dist';
 import { openPdf, getPdfOutline, searchPdf } from '../services/pdf.js';
+import { getHighlightColor } from '../utils/highlights.js';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 const GAP = 24;
+
+function HighlightOverlay({ items }) {
+  if (!items?.length) return null;
+  return (
+    <div className="pdf-highlight-layer" aria-hidden="true">
+      {items.map((item) => (
+        <span
+          key={item.id}
+          className="pdf-highlight-rect"
+          style={{
+            left: `${item.rect.x * 100}%`,
+            top: `${item.rect.y * 100}%`,
+            width: `${item.rect.w * 100}%`,
+            height: `${item.rect.h * 100}%`,
+            backgroundColor: item.color
+          }}
+        />
+      ))}
+    </div>
+  );
+}
 
 /**
  * Lector PDF (RF-03, RNF-02).
@@ -11,7 +33,16 @@ const GAP = 24;
  * a la actual; los placeholders reservan altura midiendo viewports.
  */
 const PdfReader = forwardRef(function PdfReader(
-  { blob, settings, initialPage = 1, onLocation, onReady, onJump },
+  {
+    blob,
+    settings,
+    initialPage = 1,
+    onLocation,
+    onReady,
+    onJump,
+    onSelect,
+    highlights = []
+  },
   ref
 ) {
   const containerRef = useRef(null);
@@ -22,6 +53,8 @@ const PdfReader = forwardRef(function PdfReader(
   const textLayersRef = useRef(new Map());
   const renderTokensRef = useRef(new Map());
   const searchCacheRef = useRef(new Map());
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
   const [outline, setOutline] = useState([]);
   const [numPages, setNumPages] = useState(0);
   const [currentPage, setCurrentPage] = useState(initialPage);
@@ -89,6 +122,104 @@ const PdfReader = forwardRef(function PdfReader(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blob]);
 
+  // Detectar selecciones de texto en la capa de pdf.js.
+  useEffect(() => {
+    let timer;
+
+    const captureSelection = () => {
+      const container = containerRef.current;
+      const selection = window.getSelection();
+      if (
+        !container ||
+        !selection ||
+        selection.isCollapsed ||
+        selection.rangeCount === 0
+      ) {
+        return;
+      }
+
+      const range = selection.getRangeAt(0);
+      if (!container.contains(range.commonAncestorContainer)) return;
+
+      const startElement =
+        range.startContainer.nodeType === Node.TEXT_NODE
+          ? range.startContainer.parentElement
+          : range.startContainer;
+      if (!startElement?.closest?.('.pdf-text-layer')) return;
+
+      const text = selection.toString().trim();
+      if (!text) return;
+
+      const pages = [...container.querySelectorAll('.pdf-page[data-page]')];
+      const regionMap = new Map();
+      let firstRect = null;
+
+      for (const rect of range.getClientRects()) {
+        if (rect.width < 1 || rect.height < 1) continue;
+        let pageElement = null;
+        let bodyRect = null;
+
+        for (const candidate of pages) {
+          const body = candidate.querySelector('.pdf-page-body');
+          if (!body) continue;
+          const box = body.getBoundingClientRect();
+          if (
+            rect.left < box.right &&
+            rect.right > box.left &&
+            rect.top < box.bottom &&
+            rect.bottom > box.top
+          ) {
+            pageElement = candidate;
+            bodyRect = box;
+            break;
+          }
+        }
+
+        if (!pageElement || !bodyRect || !bodyRect.width || !bodyRect.height) continue;
+        const pageNum = Number(pageElement.dataset.page);
+        if (!Number.isFinite(pageNum)) continue;
+
+        const x = Math.max(0, Math.min(1, (rect.left - bodyRect.left) / bodyRect.width));
+        const y = Math.max(0, Math.min(1, (rect.top - bodyRect.top) / bodyRect.height));
+        const right = Math.max(0, Math.min(1, (rect.right - bodyRect.left) / bodyRect.width));
+        const bottom = Math.max(0, Math.min(1, (rect.bottom - bodyRect.top) / bodyRect.height));
+        const width = right - x;
+        const height = bottom - y;
+        if (width <= 0 || height <= 0) continue;
+
+        if (!regionMap.has(pageNum)) regionMap.set(pageNum, []);
+        regionMap.get(pageNum).push({ x, y, w: width, h: height });
+        if (!firstRect) firstRect = rect;
+      }
+
+      if (regionMap.size === 0) return;
+      const regions = [...regionMap.entries()]
+        .map(([page, rects]) => ({ page, rects }))
+        .sort((a, b) => a.page - b.page);
+
+      onSelectRef.current?.({
+        text: text.slice(0, 2000),
+        page: regions[0].page,
+        regions,
+        rect: firstRect
+          ? { x: firstRect.left, y: firstRect.top, width: firstRect.width, height: firstRect.height }
+          : null,
+        source: 'pdf'
+      });
+    };
+
+    const onSelectionChange = () => {
+      clearTimeout(timer);
+      timer = setTimeout(captureSelection, 260);
+    };
+
+    document.addEventListener('selectionchange', onSelectionChange);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('selectionchange', onSelectionChange);
+    };
+  }, []);
+
   // Re-medir al cambiar el tamaño de ventana (debounced, R-04)
   useEffect(() => {
     let timer;
@@ -144,6 +275,25 @@ const PdfReader = forwardRef(function PdfReader(
     if (view === 'double') return [cur, cur + 1].filter((p) => p >= 1 && p <= numPages);
     return [cur];
   }, [currentPage, numPages, view]);
+
+  const highlightRectsByPage = useMemo(() => {
+    const map = new Map();
+    for (const highlight of highlights) {
+      const color = getHighlightColor(highlight.color);
+      for (const region of highlight.regions || []) {
+        if (!Number.isFinite(region?.page) || !Array.isArray(region.rects)) continue;
+        if (!map.has(region.page)) map.set(region.page, []);
+        for (const rect of region.rects) {
+          map.get(region.page).push({
+            id: `${highlight.id}-${map.get(region.page).length}`,
+            color: color.css,
+            rect
+          });
+        }
+      }
+    }
+    return map;
+  }, [highlights]);
 
   const renderPage = useCallback(
     async (pageNum) => {
@@ -335,6 +485,7 @@ const PdfReader = forwardRef(function PdfReader(
     goTo: (target) => {
       if (target?.page) goToPage(target.page);
     },
+    clearSelection: () => window.getSelection?.()?.removeAllRanges(),
     search: (query, options) =>
       searchPdf(docRef.current, query, { ...options, cache: searchCacheRef.current })
   }));
@@ -365,7 +516,7 @@ const PdfReader = forwardRef(function PdfReader(
               const visible = visiblePages.includes(pageNum);
               const h = heights[idx] || 600;
               return (
-                <div key={pageNum} className="pdf-page" style={{ height: h }}>
+                <div key={pageNum} className="pdf-page" style={{ height: h }} data-page={pageNum}>
                   {visible ? (
                     <div className="pdf-page-body">
                       <canvas
@@ -382,6 +533,7 @@ const PdfReader = forwardRef(function PdfReader(
                           else textLayerRefs.current.delete(pageNum);
                         }}
                       />
+                      <HighlightOverlay items={highlightRectsByPage.get(pageNum)} />
                     </div>
                   ) : (
                     <div className="flex h-full w-full items-center justify-center text-xs text-ink-300">{pageNum}</div>
@@ -393,7 +545,7 @@ const PdfReader = forwardRef(function PdfReader(
         ) : (
           <div className={`mx-auto flex h-full items-start justify-center gap-4 ${view === 'double' ? 'flex-row' : 'flex-col'} pt-2`}>
             {visiblePages.map((pageNum) => (
-              <div key={pageNum} className="pdf-page">
+              <div key={pageNum} className="pdf-page" data-page={pageNum}>
                 <div className="pdf-page-body">
                   <canvas
                     className="pdf-page-canvas"
@@ -409,6 +561,7 @@ const PdfReader = forwardRef(function PdfReader(
                       else textLayerRefs.current.delete(pageNum);
                     }}
                   />
+                  <HighlightOverlay items={highlightRectsByPage.get(pageNum)} />
                 </div>
               </div>
             ))}

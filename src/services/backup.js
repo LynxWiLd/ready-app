@@ -14,6 +14,7 @@ export async function exportBackup() {
   const progress = await db.progress.toArray();
   const bookmarks = await db.bookmarks.toArray();
   const notes = await db.notes.toArray();
+  const highlights = await db.highlights.toArray();
 
   for (const book of books) {
     const ext = book.format === 'md' ? 'md' : book.format;
@@ -33,12 +34,13 @@ export async function exportBackup() {
     JSON.stringify(
       {
         app: 'ready-app',
-        version: 1,
+        version: 2,
         exportedAt: Date.now(),
         books: books.map(({ blob, ...rest }) => rest),
         progress,
         bookmarks,
-        notes
+        notes,
+        highlights
       },
       null,
       2
@@ -84,6 +86,9 @@ export async function importBackup(file) {
   }
   for (const n of index.notes || []) {
     await db.notes.put(n);
+  }
+  for (const h of index.highlights || []) {
+    await db.highlights.put(h);
   }
 
   return { imported, total: (index.books || []).length };

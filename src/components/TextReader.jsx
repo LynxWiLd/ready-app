@@ -1,6 +1,12 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { parseText, renderMarkdown, renderPlainText } from '../services/text.js';
 import { excerptAround, foldForSearch, foldQuery, searchLimit } from '../utils/search.js';
+import {
+  getHighlightColorName,
+  quoteFromRange,
+  rangeFromOffsets,
+  scrollRangeIntoView
+} from '../utils/highlights.js';
 
 /**
  * Busca coincidencias en los nodos de texto renderizados y calcula el
@@ -71,7 +77,16 @@ function searchInArticle(article, container, query, { limit = 100, signal } = {}
  * Lector de texto plano y Markdown (RF-01, RF-03).
  */
 const TextReader = forwardRef(function TextReader(
-  { blob, settings, initialScrollTop = 0, onLocation, onReady, onJump },
+  {
+    blob,
+    settings,
+    initialScrollTop = 0,
+    onLocation,
+    onReady,
+    onJump,
+    onSelect,
+    highlights = []
+  },
   ref
 ) {
   const scrollRef = useRef(null);
@@ -79,6 +94,8 @@ const TextReader = forwardRef(function TextReader(
   const [html, setHtml] = useState('');
   const [loaded, setLoaded] = useState(false);
   const didInitialScroll = useRef(false);
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
 
   useEffect(() => {
     let alive = true;
@@ -114,6 +131,91 @@ const TextReader = forwardRef(function TextReader(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded]);
 
+  // Detectar selecciones de texto para proponer un resaltado.
+  useEffect(() => {
+    let timer;
+    const onSelectionChange = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const article = articleRef.current;
+        const container = scrollRef.current;
+        const selection = window.getSelection();
+        if (
+          !article ||
+          !container ||
+          !selection ||
+          selection.isCollapsed ||
+          selection.rangeCount === 0
+        ) {
+          return;
+        }
+        const range = selection.getRangeAt(0);
+        if (!article.contains(range.commonAncestorContainer)) return;
+        const text = range.toString().trim();
+        if (!text) return;
+        const quote = quoteFromRange(article, range);
+        if (!quote) return;
+
+        let scrollTop = null;
+        try {
+          const rect = range.getBoundingClientRect();
+          const base = container.getBoundingClientRect();
+          if (rect.height || rect.width) {
+            scrollTop = Math.max(0, container.scrollTop + rect.top - base.top - 72);
+          }
+        } catch {
+          scrollTop = null;
+        }
+
+        onSelectRef.current?.({
+          text: text.slice(0, 2000),
+          quote,
+          scrollTop,
+          source: 'text'
+        });
+      }, 260);
+    };
+    document.addEventListener('selectionchange', onSelectionChange);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('selectionchange', onSelectionChange);
+    };
+  }, [loaded]);
+
+  // Pintar resaltados con la API de Highlight (sin alterar el HTML de React).
+  useEffect(() => {
+    if (typeof Highlight === 'undefined' || typeof CSS === 'undefined' || !CSS.highlights) {
+      return undefined;
+    }
+    const article = articleRef.current;
+    if (!article) return undefined;
+
+    const groups = new Map();
+    for (const highlight of highlights) {
+      if (!highlight.quote) continue;
+      const range = rangeFromOffsets(
+        article,
+        highlight.quote.start,
+        highlight.quote.end
+      );
+      if (!range) continue;
+      const name = getHighlightColorName(highlight.color);
+      if (!groups.has(name)) groups.set(name, []);
+      groups.get(name).push(range);
+    }
+
+    const names = [];
+    for (const [name, ranges] of groups) {
+      const key = `ready-hl-${name}`;
+      CSS.highlights.set(key, new Highlight(...ranges));
+      names.push(key);
+    }
+
+    return () => {
+      for (const key of names) CSS.highlights.delete(key);
+    };
+  }, [html, loaded, highlights]);
+
   const handleScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
@@ -133,18 +235,39 @@ const TextReader = forwardRef(function TextReader(
     },
     goTo: (target) => {
       const el = scrollRef.current;
+      if (target?.quote) {
+        const range = rangeFromOffsets(
+          articleRef.current,
+          target.quote.start,
+          target.quote.end
+        );
+        if (range && scrollRangeIntoView(el, range)) return;
+      }
       if (el && target?.scrollTop != null) el.scrollTo({ top: target.scrollTop, behavior: 'smooth' });
     },
+    clearSelection: () => window.getSelection?.()?.removeAllRanges(),
     search: (query, options) =>
       searchInArticle(articleRef.current, scrollRef.current, query, options)
   }));
 
   const jumpRef = useRef(null);
   useEffect(() => {
-    if (onJump?.scrollTop != null && jumpRef.current !== onJump) {
-      jumpRef.current = onJump;
-      const el = scrollRef.current;
-      if (el) el.scrollTo({ top: onJump.scrollTop, behavior: 'smooth' });
+    if (!onJump || jumpRef.current === onJump) return;
+    jumpRef.current = onJump;
+    const el = scrollRef.current;
+    if (!el) return;
+
+    // Los resaltados guardan la cita: es más fiable que el scroll antiguo.
+    if (onJump.quote) {
+      const range = rangeFromOffsets(
+        articleRef.current,
+        onJump.quote.start,
+        onJump.quote.end
+      );
+      if (range && scrollRangeIntoView(el, range)) return;
+    }
+    if (onJump.scrollTop != null) {
+      el.scrollTo({ top: onJump.scrollTop, behavior: 'smooth' });
     }
   }, [onJump]);
 

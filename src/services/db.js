@@ -15,6 +15,16 @@ db.version(1).stores({
   settings: 'key'
 });
 
+// v2: resaltados/anotaciones sobre fragmentos de texto.
+db.version(2).stores({
+  books: 'id, format, title, author, addedAt, lastOpenedAt, size',
+  progress: 'bookId, updatedAt',
+  bookmarks: 'id, bookId, createdAt',
+  notes: 'id, bookId, createdAt',
+  settings: 'key',
+  highlights: 'id, bookId, createdAt'
+});
+
 export const FORMATS = ['epub', 'pdf', 'txt', 'md'];
 export const FORMAT_LABELS = {
   epub: 'EPUB',
@@ -71,11 +81,12 @@ export async function updateBook(id, patch) {
 }
 
 export async function deleteBook(id) {
-  await db.transaction('rw', [db.books, db.progress, db.bookmarks, db.notes], async () => {
+  await db.transaction('rw', [db.books, db.progress, db.bookmarks, db.notes, db.highlights], async () => {
     await db.books.delete(id);
     await db.progress.delete(id);
     await db.bookmarks.where('bookId').equals(id).delete();
     await db.notes.where('bookId').equals(id).delete();
+    await db.highlights.where('bookId').equals(id).delete();
   });
 }
 

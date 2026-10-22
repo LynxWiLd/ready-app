@@ -159,6 +159,12 @@
 .reader-markdown td { border: 1px solid color-mix(in srgb, var(--reader-fg) 20%, transparent); padding: 0.5em; text-align: left; }
 .reader-markdown hr { border: none; border-top: 1px solid color-mix(in srgb, var(--reader-fg) 20%, transparent); margin: 1.5em 0; }
 
+/* Resaltados de TXT/Markdown (CSS Custom Highlight API). */
+::highlight(ready-hl-yellow) { background-color: rgba(251, 191, 36, 0.55); color: inherit; }
+::highlight(ready-hl-green) { background-color: rgba(52, 211, 153, 0.5); color: inherit; }
+::highlight(ready-hl-blue) { background-color: rgba(96, 165, 250, 0.5); color: inherit; }
+::highlight(ready-hl-pink) { background-color: rgba(244, 114, 182, 0.45); color: inherit; }
+
 /* Barra de herramientas del lector (hereda el tema de lectura) */
 .reader-toolbar {
   background: color-mix(in srgb, var(--reader-bg) 88%, transparent);
@@ -234,6 +240,20 @@
 }
 .pdf-text-layer ::selection {
   background: rgba(79, 70, 229, 0.3);
+}
+
+/* Resaltados persistidos sobre el canvas del PDF (bajo la capa de texto). */
+.pdf-highlight-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  overflow: hidden;
+  pointer-events: none;
+}
+.pdf-highlight-rect {
+  position: absolute;
+  border-radius: 2px;
+  mix-blend-mode: multiply;
 }
 
 /* Zona de arrastre activa */

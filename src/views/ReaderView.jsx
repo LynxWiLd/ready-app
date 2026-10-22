@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
   Bookmark,
-  StickyNote,
+  Highlighter,
   Settings2,
   AlertTriangle,
   Loader2,
@@ -19,6 +19,7 @@ import {
   listNotes,
   addNote
 } from '../services/bookmarks.js';
+import { listHighlights, addHighlight } from '../services/highlights.js';
 import { useReaderSettings } from '../hooks/useReaderSettings.js';
 import { useToasts } from '../hooks/useToasts.js';
 import { useDebouncedValue } from '../hooks/useDebouncedValue.js';
@@ -27,7 +28,8 @@ import PdfReader from '../components/PdfReader.jsx';
 import TextReader from '../components/TextReader.jsx';
 import { SettingsPanel } from '../components/SettingsPanel.jsx';
 import { BookmarksPanel } from '../components/BookmarksPanel.jsx';
-import { NotesPanel } from '../components/NotesPanel.jsx';
+import { AnnotationsPanel } from '../components/AnnotationsPanel.jsx';
+import { SelectionToolbar } from '../components/SelectionToolbar.jsx';
 import { TocPanel } from '../components/TocPanel.jsx';
 import { SearchPanel } from '../components/SearchPanel.jsx';
 import { ToastContainer } from '../components/Toast.jsx';
@@ -47,7 +49,10 @@ export function ReaderView() {
   const [notes, setNotes] = useState([]);
   const [ready, setReady] = useState(false);
   const [loadError, setLoadError] = useState(null);
-  const [panel, setPanel] = useState(null); // 'toc' | 'search' | 'bookmarks' | 'notes' | 'settings'
+  const [panel, setPanel] = useState(null); // 'toc' | 'search' | 'bookmarks' | 'annotations' | 'settings'
+  const [highlights, setHighlights] = useState([]);
+  const [selection, setSelection] = useState(null);
+  const [savingHighlight, setSavingHighlight] = useState(false);
   const [toc, setToc] = useState([]);
   const [activeTocIndex, setActiveTocIndex] = useState(null);
   const [uiVisible, setUiVisible] = useState(true);
@@ -75,6 +80,9 @@ export function ReaderView() {
     setSearchResults([]);
     setSearching(false);
     setSearchError(null);
+    setHighlights([]);
+    setSelection(null);
+    setSavingHighlight(false);
     setPanel(null);
     (async () => {
       try {
@@ -88,10 +96,15 @@ export function ReaderView() {
         }
         setBook(b);
         if (alive) setProgress(p || null);
-        const [bm, nt] = await Promise.all([listBookmarks(bookId), listNotes(bookId)]);
+        const [bm, nt, hl] = await Promise.all([
+          listBookmarks(bookId),
+          listNotes(bookId),
+          listHighlights(bookId)
+        ]);
         if (!alive) return;
         setBookmarks(bm);
         setNotes(nt);
+        setHighlights(hl);
         touchOpened(bookId).catch(() => {});
       } catch (e) {
         if (alive) setLoadError(e?.message || 'Error al cargar el libro.');
@@ -135,6 +148,11 @@ export function ReaderView() {
     },
     [persist]
   );
+
+  const cancelSelection = useCallback(() => {
+    setSelection(null);
+    readerRef.current?.clearSelection?.();
+  }, []);
 
   // ---------------- Búsqueda dentro del libro ----------------
   useEffect(() => {
@@ -188,7 +206,14 @@ export function ReaderView() {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
         e.preventDefault();
         setUiVisible(true);
+        setSelection(null);
+        readerRef.current?.clearSelection?.();
         setPanel('search');
+        return;
+      }
+      if (e.key === 'Escape' && selection) {
+        e.preventDefault();
+        cancelSelection();
         return;
       }
       if (e.key === 'Escape' && panel) {
@@ -199,6 +224,7 @@ export function ReaderView() {
 
       const tag = e.target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable) return;
+      if (selection) cancelSelection();
       switch (e.key) {
         case 'ArrowRight':
         case 'PageDown':
@@ -226,7 +252,7 @@ export function ReaderView() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [navigate, panel]);
+  }, [navigate, panel, selection, cancelSelection]);
 
   // ---------------- UI auto-ocultable ----------------
   useEffect(() => {
@@ -251,9 +277,56 @@ export function ReaderView() {
     };
   }, [settings.autoHideUI]);
 
-  // ---------------- Marcadores y notas (RF-05) ----------------
+  // ---------------- Marcadores, notas y resaltados (RF-05) ----------------
   const refreshBookmarks = useCallback(async () => setBookmarks(await listBookmarks(bookId)), [bookId]);
   const refreshNotes = useCallback(async () => setNotes(await listNotes(bookId)), [bookId]);
+  const refreshHighlights = useCallback(
+    async () => setHighlights(await listHighlights(bookId)),
+    [bookId]
+  );
+  const refreshAnnotations = useCallback(async () => {
+    const [nextNotes, nextHighlights] = await Promise.all([
+      listNotes(bookId),
+      listHighlights(bookId)
+    ]);
+    setNotes(nextNotes);
+    setHighlights(nextHighlights);
+  }, [bookId]);
+
+  const handleSelect = useCallback((nextSelection) => {
+    if (!nextSelection?.text) return;
+    setSelection(nextSelection);
+    setPanel(null);
+  }, []);
+
+  const handleSaveHighlight = useCallback(
+    async ({ color, note }) => {
+      if (!selection || !book) return;
+      setSavingHighlight(true);
+      try {
+        await addHighlight({
+          bookId: book.id,
+          text: selection.text,
+          note,
+          color,
+          cfi: selection.cfi || null,
+          page: selection.page || null,
+          regions: selection.regions || null,
+          quote: selection.quote || null,
+          scrollTop: selection.scrollTop ?? null
+        });
+        await refreshHighlights();
+        setSelection(null);
+        readerRef.current?.clearSelection?.();
+        success('Resaltado guardado.');
+      } catch {
+        toastError('No se pudo guardar el resaltado.');
+      } finally {
+        setSavingHighlight(false);
+      }
+    },
+    [selection, book, refreshHighlights, success, toastError]
+  );
 
   const handleAddBookmark = useCallback(
     async (label) => {
@@ -300,11 +373,14 @@ export function ReaderView() {
   const jumpToItem = useCallback(
     (item) => {
       setPanel(null);
+      setSelection(null);
       setUiVisible(true);
+      readerRef.current?.clearSelection?.();
       const target = {
         cfi: item.cfi,
         href: item.href,
         page: item.page,
+        quote: item.quote,
         scrollTop: item.scrollTop,
         token: Date.now()
       };
@@ -389,11 +465,11 @@ export function ReaderView() {
           <Bookmark className="h-5 w-5" />
         </button>
         <button
-          className={`reader-tool-btn ${panel === 'notes' ? 'is-active' : ''}`}
-          onClick={() => setPanel(panel === 'notes' ? null : 'notes')}
-          title="Notas"
+          className={`reader-tool-btn ${panel === 'annotations' ? 'is-active' : ''}`}
+          onClick={() => setPanel(panel === 'annotations' ? null : 'annotations')}
+          title="Anotaciones"
         >
-          <StickyNote className="h-5 w-5" />
+          <Highlighter className="h-5 w-5" />
         </button>
         <button
           className="reader-tool-btn"
@@ -419,6 +495,8 @@ export function ReaderView() {
               blob={book.blob}
               settings={settings}
               initialCfi={initial.cfi}
+              highlights={highlights}
+              onSelect={handleSelect}
               onLocation={handleLocation}
               onJump={jump}
               onReady={(info) => {
@@ -434,6 +512,8 @@ export function ReaderView() {
               blob={book.blob}
               settings={settings}
               initialPage={initial.page || 1}
+              highlights={highlights}
+              onSelect={handleSelect}
               onLocation={handleLocation}
               onJump={jump}
               onReady={(info) => {
@@ -449,6 +529,8 @@ export function ReaderView() {
               blob={book.blob}
               settings={settings}
               initialScrollTop={initial.scrollTop || 0}
+              highlights={highlights}
+              onSelect={handleSelect}
               onLocation={handleLocation}
               onJump={jump}
               onReady={(info) => {
@@ -459,7 +541,7 @@ export function ReaderView() {
           )}
 
           {/* Zonas de clic para pasar página (RF-03) */}
-          {!panel && (
+          {!panel && !selection && (
             <>
               <button
                 className={`absolute inset-y-0 left-0 z-10 w-[18%] transition-opacity ${
@@ -513,12 +595,13 @@ export function ReaderView() {
                 onClose={() => setPanel(null)}
               />
             )}
-            {panel === 'notes' && (
-              <NotesPanel
+            {panel === 'annotations' && (
+              <AnnotationsPanel
+                highlights={highlights}
                 notes={notes}
-                onAdd={handleAddNote}
+                onAddNote={handleAddNote}
                 onJump={jumpToItem}
-                onChanged={refreshNotes}
+                onChanged={refreshAnnotations}
                 onClose={() => setPanel(null)}
               />
             )}
@@ -546,6 +629,13 @@ export function ReaderView() {
       >
         <Eye className="h-5 w-5" />
       </button>
+
+      <SelectionToolbar
+        selection={selection}
+        saving={savingHighlight}
+        onSave={handleSaveHighlight}
+        onCancel={cancelSelection}
+      />
 
       <ToastContainer toasts={toasts} onDismiss={dismiss} />
     </div>
