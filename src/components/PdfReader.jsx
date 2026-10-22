@@ -1,5 +1,6 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { openPdf } from '../services/pdf.js';
+import { TextLayer } from 'pdfjs-dist';
+import { openPdf, getPdfOutline } from '../services/pdf.js';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 const GAP = 24;
@@ -17,6 +18,10 @@ const PdfReader = forwardRef(function PdfReader(
   const docRef = useRef(null);
   const canvasRefs = useRef(new Map());
   const tasksRef = useRef(new Map());
+  const textLayerRefs = useRef(new Map());
+  const textLayersRef = useRef(new Map());
+  const renderTokensRef = useRef(new Map());
+  const [outline, setOutline] = useState([]);
   const [numPages, setNumPages] = useState(0);
   const [currentPage, setCurrentPage] = useState(initialPage);
   const [zoom, setZoom] = useState(settings.pdfZoom);
@@ -37,16 +42,22 @@ const PdfReader = forwardRef(function PdfReader(
     let alive = true;
     setLoading(true);
     openPdf(blob)
-      .then(({ doc, numPages: n }) => {
+      .then(async ({ doc, numPages: n }) => {
+        if (!alive) {
+          doc.destroy();
+          return;
+        }
+        const toc = await getPdfOutline(doc);
         if (!alive) {
           doc.destroy();
           return;
         }
         docRef.current = doc;
+        setOutline(toc);
         setNumPages(n);
         setCurrentPage(initialPage || 1);
         setLoading(false);
-        onReady?.({ numPages: n });
+        onReady?.({ numPages: n, toc });
       })
       .catch((err) => {
         if (!alive) return;
@@ -63,6 +74,15 @@ const PdfReader = forwardRef(function PdfReader(
       docRef.current = null;
       canvasRefs.current.clear();
       tasksRef.current.clear();
+      textLayerRefs.current.clear();
+      for (const layer of textLayersRef.current.values()) {
+        try {
+          layer.cancel?.();
+        } catch {
+          /* noop */
+        }
+      }
+      textLayersRef.current.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blob]);
@@ -93,7 +113,7 @@ const PdfReader = forwardRef(function PdfReader(
         try {
           const page = await doc.getPage(i);
           const base = page.getViewport({ scale: 1 });
-          const s = avail / base.width;
+          const s = (avail / base.width) * zoom;
           next[i - 1] = Math.ceil(page.getViewport({ scale: s }).height) + GAP;
           page.cleanup?.();
         } catch {
@@ -128,8 +148,15 @@ const PdfReader = forwardRef(function PdfReader(
       const doc = docRef.current;
       const entry = canvasRefs.current.get(pageNum);
       if (!doc || !entry) return;
+
+      // Evita que un render antiguo (zoom/resize) pise al actual.
+      const token = (renderTokensRef.current.get(pageNum) || 0) + 1;
+      renderTokensRef.current.set(pageNum, token);
+      const isCurrent = () => renderTokensRef.current.get(pageNum) === token;
+
       const avail = availableWidth();
       const page = await doc.getPage(pageNum);
+      if (!isCurrent()) return;
       const base = page.getViewport({ scale: 1 });
       const effective = (avail / base.width) * zoom;
       const cssVp = page.getViewport({ scale: effective });
@@ -143,14 +170,41 @@ const PdfReader = forwardRef(function PdfReader(
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       const task = page.render({ canvasContext: ctx, viewport: page.getViewport({ scale: effective * dpr }) });
       tasksRef.current.set(pageNum, task);
+      let cancelled = false;
       try {
         await task.promise;
       } catch {
-        /* cancelado o error de render */
+        cancelled = true; // cancelado o error de render
       } finally {
         tasksRef.current.delete(pageNum);
-        page.cleanup?.();
       }
+      if (cancelled || !isCurrent()) return;
+
+      // Capa de texto sobre el canvas: selección, copia y futura búsqueda.
+      const textDiv = textLayerRefs.current.get(pageNum);
+      if (textDiv) {
+        try {
+          textLayersRef.current.get(pageNum)?.cancel();
+        } catch {
+          /* noop */
+        }
+        textLayersRef.current.delete(pageNum);
+        textDiv.replaceChildren();
+        textDiv.style.setProperty('--scale-factor', String(effective));
+        const layer = new TextLayer({
+          textContentSource: page.streamTextContent({ includeMarkedContent: true, disableNormalization: true }),
+          container: textDiv,
+          viewport: cssVp
+        });
+        textLayersRef.current.set(pageNum, layer);
+        try {
+          await layer.render();
+        } catch {
+          /* capa de texto no disponible */
+        }
+      }
+
+      page.cleanup?.();
     },
     [availableWidth, zoom, dpr]
   );
@@ -173,8 +227,38 @@ const PdfReader = forwardRef(function PdfReader(
     });
   }, [visiblePages, renderPage, widthVersion]);
 
+  // Cancelar capas de texto de páginas que dejaron de ser visibles.
+  useEffect(() => {
+    for (const [p, layer] of textLayersRef.current) {
+      if (!visiblePages.includes(p)) {
+        try {
+          layer.cancel?.();
+        } catch {
+          /* noop */
+        }
+        textLayersRef.current.delete(p);
+      }
+    }
+  }, [visiblePages]);
+
   // Zoom en caliente
   useEffect(() => setZoom(settings.pdfZoom), [settings.pdfZoom]);
+
+  /** Índice del outline activo para una página (última entrada ≤ página). */
+  const tocIndexForPage = useCallback(
+    (page) => {
+      let index = null;
+      let best = 0;
+      outline.forEach((item, i) => {
+        if (item.page && item.page <= page && item.page > best) {
+          best = item.page;
+          index = i;
+        }
+      });
+      return index;
+    },
+    [outline]
+  );
 
   const commitPage = useCallback(
     (page) => {
@@ -182,10 +266,11 @@ const PdfReader = forwardRef(function PdfReader(
       setCurrentPage(clamped);
       onLocation?.({
         page: clamped,
-        percent: numPages > 1 ? ((clamped - 1) / (numPages - 1)) * 100 : 0
+        percent: numPages > 1 ? ((clamped - 1) / (numPages - 1)) * 100 : 0,
+        tocIndex: tocIndexForPage(clamped)
       });
     },
-    [numPages, onLocation]
+    [numPages, onLocation, tocIndexForPage]
   );
 
   /** Desplaza el contenedor al tope de una página (solo modo desplazar). */
@@ -278,13 +363,22 @@ const PdfReader = forwardRef(function PdfReader(
               return (
                 <div key={pageNum} className="pdf-page" style={{ height: h }}>
                   {visible ? (
-                    <canvas
-                      className="pdf-page-canvas"
-                      ref={(el) => {
-                        if (el) canvasRefs.current.set(pageNum, el);
-                        else canvasRefs.current.delete(pageNum);
-                      }}
-                    />
+                    <div className="pdf-page-body">
+                      <canvas
+                        className="pdf-page-canvas"
+                        ref={(el) => {
+                          if (el) canvasRefs.current.set(pageNum, el);
+                          else canvasRefs.current.delete(pageNum);
+                        }}
+                      />
+                      <div
+                        className="pdf-text-layer"
+                        ref={(el) => {
+                          if (el) textLayerRefs.current.set(pageNum, el);
+                          else textLayerRefs.current.delete(pageNum);
+                        }}
+                      />
+                    </div>
                   ) : (
                     <div className="flex h-full w-full items-center justify-center text-xs text-ink-300">{pageNum}</div>
                   )}
@@ -296,13 +390,22 @@ const PdfReader = forwardRef(function PdfReader(
           <div className={`mx-auto flex h-full items-start justify-center gap-4 ${view === 'double' ? 'flex-row' : 'flex-col'} pt-2`}>
             {visiblePages.map((pageNum) => (
               <div key={pageNum} className="pdf-page">
-                <canvas
-                  className="pdf-page-canvas"
-                  ref={(el) => {
-                    if (el) canvasRefs.current.set(pageNum, el);
-                    else canvasRefs.current.delete(pageNum);
-                  }}
-                />
+                <div className="pdf-page-body">
+                  <canvas
+                    className="pdf-page-canvas"
+                    ref={(el) => {
+                      if (el) canvasRefs.current.set(pageNum, el);
+                      else canvasRefs.current.delete(pageNum);
+                    }}
+                  />
+                  <div
+                    className="pdf-text-layer"
+                    ref={(el) => {
+                      if (el) textLayerRefs.current.set(pageNum, el);
+                      else textLayerRefs.current.delete(pageNum);
+                    }}
+                  />
+                </div>
               </div>
             ))}
           </div>

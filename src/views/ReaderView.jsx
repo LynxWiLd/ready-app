@@ -294,7 +294,7 @@ export function ReaderView() {
             {positionLabel ? ` · ${positionLabel}` : percent ? ` · ${formatPercent(percent)}` : ''}
           </p>
         </div>
-        {book.format === 'epub' && toc.length > 0 && (
+        {toc.length > 0 && (
           <button
             className={`reader-tool-btn ${panel === 'toc' ? 'is-active' : ''}`}
             onClick={() => setPanel(panel === 'toc' ? null : 'toc')}
@@ -360,6 +360,7 @@ export function ReaderView() {
               onJump={jump}
               onReady={(info) => {
                 if (info?.error) setLoadError(info.error);
+                setToc(Array.isArray(info?.toc) ? info.toc : []);
                 setReady(true);
               }}
             />

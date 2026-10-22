@@ -3,8 +3,8 @@ import { PanelShell } from './BookmarksPanel.jsx';
 import { cn } from '../utils/cn.js';
 
 /**
- * Panel de tabla de contenidos (TOC) del EPUB.
- * props: toc (lista aplanada {label, href, depth}), activeIndex, onJump(item), onClose
+ * Panel de tabla de contenidos (TOC) de EPUB o PDF.
+ * props: toc (lista aplanada {label, href|page, depth}), activeIndex, onJump(item), onClose
  */
 export function TocPanel({ toc, activeIndex, onJump, onClose }) {
   return (
@@ -17,7 +17,7 @@ export function TocPanel({ toc, activeIndex, onJump, onClose }) {
         <nav className="space-y-0.5">
           {toc.map((item, i) => (
             <button
-              key={`${item.href}#${i}`}
+              key={`${item.href || item.page || 'item'}#${i}`}
               onClick={() => onJump(item)}
               title={item.label}
               style={{ paddingLeft: `${0.75 + item.depth * 0.85}rem` }}

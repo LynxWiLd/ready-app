@@ -199,6 +199,42 @@
   gap: 12px;
   padding: 12px 0;
 }
+.pdf-page-body {
+  position: relative;
+  display: block;
+}
+
+/* Capa de texto de pdf.js: permite seleccionar/copiar sin tapar el canvas. */
+.pdf-text-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 20; /* por encima de las zonas de paso de página (z-10) */
+  overflow: hidden;
+  line-height: 1;
+  text-align: initial;
+  text-size-adjust: none;
+  transform-origin: 0 0;
+  pointer-events: none; /* solo el texto captura el puntero */
+}
+.pdf-text-layer :is(span, br) {
+  position: absolute;
+  color: transparent;
+  white-space: pre;
+  cursor: text;
+  pointer-events: auto;
+  transform-origin: 0% 0%;
+}
+.pdf-text-layer span.markedContent {
+  top: 0;
+  height: 0;
+}
+.pdf-text-layer span[role='img'] {
+  user-select: none;
+  cursor: default;
+}
+.pdf-text-layer ::selection {
+  background: rgba(79, 70, 229, 0.3);
+}
 
 /* Zona de arrastre activa */
 .dropzone-active {

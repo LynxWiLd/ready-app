@@ -63,6 +63,51 @@ export async function renderPdfCover(doc, { width = 400, quality = 0.82 } = {}) 
 }
 
 /**
+ * Extrae el outline (índice) del PDF como lista plana con profundidad y
+ * número de página (1-based). Las entradas sin destino resoluble se omiten.
+ * @returns {Promise<Array<{label: string, page: number, depth: number}>>}
+ */
+export async function getPdfOutline(doc) {
+  let outline = [];
+  try {
+    outline = (await doc.getOutline()) || [];
+  } catch {
+    return [];
+  }
+  if (!outline.length) return [];
+
+  // 1) Aplanar el árbol conservando el orden y la profundidad.
+  const raw = [];
+  const walk = (items, depth) => {
+    for (const item of items || []) {
+      raw.push({ label: clean(item.title) || 'Sin título', dest: item.dest, depth });
+      if (item.items?.length) walk(item.items, depth + 1);
+    }
+  };
+  walk(outline, 0);
+
+  // 2) Resolver los destinos en paralelo (son promesas independientes).
+  const pageForDest = async (dest) => {
+    try {
+      let explicit = dest;
+      if (typeof dest === 'string') explicit = await doc.getDestination(dest);
+      if (!Array.isArray(explicit) || explicit.length === 0) return null;
+      // Lo normal es una referencia de página; algunos PDFs usan un índice.
+      const pageIndex =
+        typeof explicit[0] === 'number' ? explicit[0] : await doc.getPageIndex(explicit[0]);
+      return pageIndex + 1;
+    } catch {
+      return null;
+    }
+  };
+  const pages = await Promise.all(raw.map((entry) => pageForDest(entry.dest)));
+
+  return raw
+    .map((entry, i) => ({ label: entry.label, page: pages[i], depth: entry.depth }))
+    .filter((entry) => Number.isInteger(entry.page) && entry.page > 0);
+}
+
+/**
  * Abre un PDF para lectura y cachea el documento.
  * RNF-02: el render es perezoso (solo páginas visibles).
  */

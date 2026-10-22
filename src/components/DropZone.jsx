@@ -14,6 +14,8 @@ export function DropZone({ onFiles, compact = false, inputId }) {
   const handleDrop = useCallback(
     (e) => {
       e.preventDefault();
+      // Evita que el listener global de LibraryView importe el archivo otra vez.
+      e.stopPropagation();
       counter.current = 0;
       setActive(false);
       const files = Array.from(e.dataTransfer?.files || []);
