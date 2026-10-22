@@ -1,10 +1,11 @@
-import { BookOpen, Trash2 } from 'lucide-react';
+import { useRef } from 'react';
+import { BookOpen, Trash2, ImagePlus, ImageOff } from 'lucide-react';
 import { CoverImage } from './CoverImage.jsx';
 import { ProgressBar } from './ProgressBar.jsx';
 import { FORMAT_LABELS } from '../services/db.js';
 import { formatBytes, formatDateTime, truncate } from '../utils/format.js';
 
-export function BookCard({ book, view = 'grid', onOpen, onDelete }) {
+export function BookCard({ book, view = 'grid', onOpen, onDelete, onCoverFile, onCoverClear }) {
   const meta = book.metadata || {};
   const cover = book.cover;
 
@@ -27,7 +28,7 @@ export function BookCard({ book, view = 'grid', onOpen, onDelete }) {
         </div>
         <div className="flex flex-col items-end gap-2">
           <span className="text-xs text-ink-400">{formatDateTime(book.lastOpenedAt)}</span>
-          <BookMenu onDelete={onDelete} />
+          <BookMenu book={book} onDelete={onDelete} onCoverFile={onCoverFile} onCoverClear={onCoverClear} />
         </div>
       </article>
     );
@@ -61,21 +62,59 @@ export function BookCard({ book, view = 'grid', onOpen, onDelete }) {
       </div>
 
       <div className="absolute right-2 top-8 opacity-0 transition group-hover:opacity-100">
-        <BookMenu onDelete={onDelete} />
+        <BookMenu book={book} onDelete={onDelete} onCoverFile={onCoverFile} onCoverClear={onCoverClear} />
       </div>
     </article>
   );
 }
 
-function BookMenu({ onDelete }) {
+function BookMenu({ book, onDelete, onCoverFile, onCoverClear }) {
+  const coverInputRef = useRef(null);
+
   return (
-    <div className="relative">
+    <div className="relative flex items-center gap-1">
+      <input
+        ref={coverInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = '';
+          if (file) onCoverFile?.(file);
+        }}
+      />
       <button
-        className="icon-btn bg-white/90 shadow-sm backdrop-blur"
+        className="icon-btn h-7 w-7 bg-white/90 shadow-sm backdrop-blur"
+        onClick={(e) => {
+          e.stopPropagation();
+          coverInputRef.current?.click();
+        }}
+        title="Elegir portada"
+        aria-label="Elegir portada"
+      >
+        <ImagePlus className="h-3.5 w-3.5 text-indigo-500" />
+      </button>
+      {book?.cover && (
+        <button
+          className="icon-btn h-7 w-7 bg-white/90 shadow-sm backdrop-blur"
+          onClick={(e) => {
+            e.stopPropagation();
+            onCoverClear?.();
+          }}
+          title="Quitar portada"
+          aria-label="Quitar portada"
+        >
+          <ImageOff className="h-3.5 w-3.5 text-ink-500" />
+        </button>
+      )}
+      <button
+        className="icon-btn h-7 w-7 bg-white/90 shadow-sm backdrop-blur"
         onClick={(e) => {
           e.stopPropagation();
           onDelete?.();
         }}
+        title="Eliminar libro"
         aria-label="Eliminar libro"
       >
         <Trash2 className="h-4 w-4 text-rose-500" />

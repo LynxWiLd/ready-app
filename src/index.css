@@ -77,6 +77,8 @@
 .reader-surface {
   height: 100%;
   overflow: auto;
+  /* Evita que el gesto de leer hacia abajo dispare pull-to-refresh */
+  overscroll-behavior-y: contain;
   transition: background-color 160ms ease, color 160ms ease;
 }
 
@@ -203,4 +205,23 @@
   outline: 2px dashed #6366f1;
   outline-offset: -8px;
   background: rgba(99, 102, 241, 0.06);
+}
+
+/* ------------------------------------------------------------------ */
+/* Móvil: áreas seguras (viewport-fit=cover en index.html)            */
+/* padding-top = inset + el padding base (py-2 / py-3) para que con   */
+/* inset=0 el resultado sea idéntico al actual.                       */
+/* ------------------------------------------------------------------ */
+
+.reader-toolbar {
+  padding-top: calc(env(safe-area-inset-top, 0px) + 0.5rem); /* py-2 */
+}
+
+header.sticky {
+  padding-top: calc(env(safe-area-inset-top, 0px) + 0.75rem); /* py-3 */
+}
+
+/* Botón flotante «Mostrar controles» del lector (fixed bottom-3) */
+.reader-tool-btn.fixed {
+  bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
 }

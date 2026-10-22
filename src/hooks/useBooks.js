@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getAllBooks, createBook, deleteBook, getBook } from '../services/db.js';
+import { getAllBooks, createBook, deleteBook, getBook, updateBook } from '../services/db.js';
 import { detectFormat, WARN_FILE_SIZE, MAX_FILE_SIZE } from '../utils/magic.js';
 import { parseEpub } from '../services/epub.js';
-import { parsePdf } from '../services/pdf.js';
+import { parsePdf, openPdf, renderPdfCover } from '../services/pdf.js';
 import { parseText } from '../services/text.js';
 
 /**
@@ -25,6 +25,47 @@ export function useBooks() {
 
   useEffect(() => {
     refresh();
+  }, [refresh]);
+
+  // Portadas de preview para PDFs importados antes de existir el render
+  // de portada (o cuya portada automática falló). Se salta los libros cuya
+  // portada quitó el usuario (`coverCleared`).
+  const backfillStarted = useRef(false);
+  useEffect(() => {
+    if (backfillStarted.current) return;
+    backfillStarted.current = true;
+    (async () => {
+      try {
+        const all = await getAllBooks();
+        const pending = all.filter((b) => b.format === 'pdf' && !b.cover && !b.coverCleared && b.blob);
+        let changed = 0;
+        for (const book of pending) {
+          let handle = null;
+          try {
+            handle = await openPdf(book.blob);
+            const coverBlob = await renderPdfCover(handle.doc);
+            if (coverBlob) {
+              await updateBook(book.id, {
+                cover: await coverBlob.arrayBuffer(),
+                coverType: coverBlob.type
+              });
+              changed++;
+            }
+          } catch {
+            /* libro ilegible o render no disponible */
+          } finally {
+            try {
+              handle?.destroy();
+            } catch {
+              /* noop */
+            }
+          }
+        }
+        if (changed) await refresh();
+      } catch {
+        /* backfill best-effort */
+      }
+    })();
   }, [refresh]);
 
   const importFile = useCallback(

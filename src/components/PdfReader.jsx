@@ -188,6 +188,30 @@ const PdfReader = forwardRef(function PdfReader(
     [numPages, onLocation]
   );
 
+  /** Desplaza el contenedor al tope de una página (solo modo desplazar). */
+  const scrollToPage = useCallback(
+    (page) => {
+      if (view !== 'scroll') return;
+      const el = containerRef.current;
+      if (!el || heights.length === 0) return;
+      const clamped = Math.min(Math.max(1, page), Math.max(1, numPages));
+      let acc = 0;
+      for (let i = 0; i < clamped - 1; i++) acc += heights[i] || 600;
+      el.scrollTo({ top: acc, behavior: 'auto' });
+    },
+    [view, heights, numPages]
+  );
+
+  /** Navegación (toques laterales, teclado, marcadores): cambia Y desplaza. */
+  const goToPage = useCallback(
+    (page) => {
+      const clamped = Math.min(Math.max(1, page), Math.max(1, numPages));
+      commitPage(clamped);
+      scrollToPage(clamped);
+    },
+    [commitPage, scrollToPage, numPages]
+  );
+
   // Retomar la página guardada al abrir (RF-05). En modo desplazar hay que
   // scrollear una vez medidas las alturas: si no, el primer handleScroll
   // recalcula la página desde el scrollTop real y pisa la página guardada.
@@ -198,14 +222,9 @@ const PdfReader = forwardRef(function PdfReader(
     if (view === 'scroll' && heights.length === 0) return; // esperar a medir
     resumedRef.current = true;
     const target = Math.min(Math.max(1, initialPageRef.current), numPages);
-    if (view === 'scroll') {
-      const el = containerRef.current;
-      let acc = 0;
-      for (let i = 0; i < target - 1; i++) acc += heights[i] || 600;
-      el?.scrollTo?.({ top: acc, behavior: 'auto' });
-    }
+    if (view === 'scroll') scrollToPage(target);
     commitPage(target);
-  }, [numPages, heights, view, commitPage]);
+  }, [numPages, heights, view, commitPage, scrollToPage]);
 
   // Tracking de página actual en modo desplazar
   const handleScroll = useCallback(() => {
@@ -224,18 +243,10 @@ const PdfReader = forwardRef(function PdfReader(
   }, [view, heights, commitPage, numPages]);
 
   useImperativeHandle(ref, () => ({
-    next: () => commitPage(currentPage + (view === 'double' ? 2 : 1)),
-    prev: () => commitPage(currentPage - (view === 'double' ? 2 : 1)),
+    next: () => goToPage(currentPage + (view === 'double' ? 2 : 1)),
+    prev: () => goToPage(currentPage - (view === 'double' ? 2 : 1)),
     goTo: (target) => {
-      if (target?.page) {
-        commitPage(target.page);
-        if (view === 'scroll') {
-          const el = containerRef.current;
-          let acc = 0;
-          for (let i = 0; i < target.page - 1; i++) acc += heights[i] || 600;
-          el?.scrollTo?.({ top: acc, behavior: 'auto' });
-        }
-      }
+      if (target?.page) goToPage(target.page);
     }
   }));
 
@@ -244,15 +255,9 @@ const PdfReader = forwardRef(function PdfReader(
   useEffect(() => {
     if (onJump?.page && jumpRef.current !== onJump) {
       jumpRef.current = onJump;
-      commitPage(onJump.page);
-      if (view === 'scroll') {
-        const el = containerRef.current;
-        let acc = 0;
-        for (let i = 0; i < onJump.page - 1; i++) acc += heights[i] || 600;
-        el?.scrollTo?.({ top: acc, behavior: 'auto' });
-      }
+      goToPage(onJump.page);
     }
-  }, [onJump, heights, view, commitPage]);
+  }, [onJump, goToPage]);
 
   const pageWidth = availableWidth();
 

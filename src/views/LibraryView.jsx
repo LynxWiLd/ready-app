@@ -12,6 +12,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { SettingsPanel } from '../components/SettingsPanel.jsx';
 import { ToastContainer } from '../components/Toast.jsx';
 import { exportBackup, importBackup, downloadBlob } from '../services/backup.js';
+import { setBookCover, clearBookCover } from '../services/cover.js';
 import { cn } from '../utils/cn.js';
 
 export function LibraryView({ onOpenBook }) {
@@ -114,6 +115,32 @@ export function LibraryView({ onOpenBook }) {
     const finished = books.filter((b) => b.progress >= 100).length;
     return { total, totalSize, started, finished };
   }, [books]);
+
+  const handleCoverFile = useCallback(
+    async (book, file) => {
+      try {
+        await setBookCover(book.id, file);
+        await refresh();
+        success('Portada actualizada.');
+      } catch (e) {
+        error(e?.message || 'No se pudo guardar la portada.');
+      }
+    },
+    [refresh, success, error]
+  );
+
+  const handleCoverClear = useCallback(
+    async (book) => {
+      try {
+        await clearBookCover(book.id);
+        await refresh();
+        success('Portada quitada del libro.');
+      } catch {
+        error('No se pudo quitar la portada.');
+      }
+    },
+    [refresh, success, error]
+  );
 
   const onExport = useCallback(async () => {
     try {
@@ -238,6 +265,8 @@ export function LibraryView({ onOpenBook }) {
                     view={view}
                     onOpen={() => onOpenBook(book.id)}
                     onDelete={() => setConfirmDelete(book)}
+                    onCoverFile={(file) => handleCoverFile(book, file)}
+                    onCoverClear={() => handleCoverClear(book)}
                   />
                 ))}
               </div>

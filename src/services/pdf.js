@@ -21,6 +21,8 @@ export async function parsePdf(blob) {
     } catch {
       description = '';
     }
+    // Portada de preview: primera página renderizada (visual en la biblioteca).
+    const coverBlob = await renderPdfCover(doc);
     return {
       title,
       author: clean(info.Author) || 'Autor desconocido',
@@ -28,10 +30,35 @@ export async function parsePdf(blob) {
       publisher: clean(info.Producer) || '',
       description: truncate(clean(description), 400),
       spineCount: doc.numPages,
-      wordCount: null
+      wordCount: null,
+      coverBlob
     };
   } finally {
     doc.destroy();
+  }
+}
+
+/**
+ * Renderiza la primera página del documento como miniatura de portada.
+ * Devuelve un Blob JPEG o null si el render no está disponible (p. ej. Node).
+ */
+export async function renderPdfCover(doc, { width = 400, quality = 0.82 } = {}) {
+  try {
+    const page = await doc.getPage(1);
+    const base = page.getViewport({ scale: 1 });
+    const viewport = page.getViewport({ scale: width / base.width });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(viewport.width));
+    canvas.height = Math.max(1, Math.round(viewport.height));
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
+    page.cleanup?.();
+    return blob;
+  } catch {
+    return null;
   }
 }
 
