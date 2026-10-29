@@ -15,6 +15,8 @@ Ready is a **local-first reader PWA** (EPUB, PDF, TXT/Markdown) built with React
   `.test-files/` is gitignored. Only format detection and TXT/Markdown parsing run in Node; EPUB parsing, Markdown sanitization and PDF cover rendering need a browser DOM.
 - `node scripts/inspect-pdf.mjs <file.pdf>` — dumps PDF metadata and first-page text in Node.
 - To test the service worker/PWA behavior, run `npm run build && npm run preview` (dev mode does not register the SW).
+- `npm run test:e2e` — Playwright suite (Chromium) in `tests/e2e/`. It regenerates `.test-files/` and starts Vite (`webServer` in `playwright.config.js`, reusing a server already on port 5173). `npm run test:e2e:ui` opens the UI runner. Tests are single-worker on purpose; the fixtures come from `scripts/make-test-files.mjs`.
+- When writing E2E tests, wait for the library to settle before `setInputFiles` (`waitForLibrary` in `tests/e2e/helpers.js`). `LibraryView` renders the import `DropZone` in two different branches, so it remounts when IndexedDB finishes loading and files set on the old input are silently lost.
 
 ## Architecture notes
 

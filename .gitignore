@@ -13,3 +13,6 @@ yarn-error.log*
 .test-files
 .freebuff/
 screenshots/
+test-results/
+playwright-report/
+blob-report/
