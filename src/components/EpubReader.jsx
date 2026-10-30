@@ -16,13 +16,25 @@ const THEME_COLORS = {
   sepia: { bg: '#f5eddc', fg: '#43331f', accent: '#a16207', muted: '#7a6749' }
 };
 
+/**
+ * Margen lateral del EPUB.
+ *
+ * epub.js no deja el `padding` del body en manos del CSS: al paginar escribe
+ * `padding-left/right` en línea con `!important` a partir del `gap` de la
+ * maquetación (cada lado recibe gap/2). Un `!important` en línea gana a
+ * cualquier hoja de estilos, así que el margen se configura con el gap y no
+ * con reglas CSS, que quedarían muertas.
+ */
+function gapForMargin(margin) {
+  return Math.max(0, margin) * 2;
+}
+
 function buildThemeCSS(settings) {
   const t = THEME_COLORS[settings.theme] || THEME_COLORS.light;
   const font = FONT_STACKS[settings.font] || FONT_STACKS.sans;
   return [
     `html, body { background: ${t.bg} !important; color: ${t.fg} !important; }`,
     `body { font-family: ${font} !important; font-size: ${settings.fontSize}px !important; line-height: ${settings.lineHeight} !important; }`,
-    `body { padding-left: ${settings.margin}px !important; padding-right: ${settings.margin}px !important; box-sizing: border-box; }`,
     `a { color: ${t.accent} !important; }`,
     `p, div, span, li, h1, h2, h3, h4, h5, h6 { color: ${t.fg} !important; }`,
     `img { max-width: 100% !important; height: auto !important; }`,
@@ -52,7 +64,11 @@ const EpubReader = forwardRef(function EpubReader(
   const applySettings = useCallback((rendition, s) => {
     if (!rendition) return;
     try {
-      rendition.themes.register('reader-theme', buildThemeCSS(s));
+      // OJO: themes.register('x', css) interpreta el CSS como URL en epub.js
+      // 0.3.93: acaba inyectando <link href="http://…/html,%20body%20{…}">, que
+      // no carga y deja el libro sin tema ni tipografía. registerCss usa un
+      // <style> y reemplaza el anterior en cada cambio.
+      rendition.themes.registerCss('reader-theme', buildThemeCSS(s));
       rendition.themes.select('reader-theme');
     } catch {
       /* noop */
@@ -81,6 +97,19 @@ const EpubReader = forwardRef(function EpubReader(
           allowScriptedContent: true
         });
         renditionRef.current = rendition;
+
+        // El margen se aplica por el gap de la maquetación (ver gapForMargin).
+        if (rendition.manager?.settings) {
+          rendition.manager.settings.gap = gapForMargin(settingsRef.current.margin);
+        }
+
+        // `Themes.inject()` sólo reinyecta temas con `rules`/`url`, no los
+        // registrados con `registerCss`: cada `contents` nuevo (cambio de
+        // capítulo, re-maquetación al mover el ancho) nace con la clase pero
+        // sin la hoja de estilos. Reaplicar en `rendered` mantiene el tema.
+        rendition.on('rendered', () => {
+          applySettings(rendition, settingsRef.current);
+        });
 
         // Selección de texto dentro del iframe: propone crear un resaltado.
         rendition.on('selected', (cfiRange, contents) => {
@@ -239,6 +268,28 @@ const EpubReader = forwardRef(function EpubReader(
     applySettings(renditionRef.current, settings);
   }, [settings, applySettings]);
 
+  // Ancho de línea y márgenes cambian la caja de paginación.
+  // - El margen vive en el gap de la maquetación: `updateLayout()` reformatea
+  //   las vistas existentes sin recargar los iframes (conserva el tema).
+  // - El ancho sí cambia el tamaño del stage: `resize()` recrea las vistas, y
+  //   el manejador de `rendered` vuelve a inyectar el tema.
+  useEffect(() => {
+    if (!renditionReady) return undefined;
+    const id = requestAnimationFrame(() => {
+      const manager = renditionRef.current?.manager;
+      if (!manager) return;
+      try {
+        manager.settings.gap = gapForMargin(settings.margin);
+        manager.updateLayout?.();
+        // No-op si el ancho del contenedor no cambió.
+        manager.resize?.();
+      } catch {
+        /* noop */
+      }
+    });
+    return () => cancelAnimationFrame(id);
+  }, [settings.maxWidth, settings.margin, renditionReady]);
+
   useImperativeHandle(ref, () => ({
     next: () => renditionRef.current?.next()?.catch?.(() => {}),
     prev: () => renditionRef.current?.prev()?.catch?.(() => {}),
@@ -271,7 +322,17 @@ const EpubReader = forwardRef(function EpubReader(
     }
   }, [jump]);
 
-  return <div ref={containerRef} className="h-full w-full" />;
+  return (
+    <div className={`reader-surface theme-${settings.theme}`}>
+      {/* El ancho de línea se aplica al contenedor: epub.js pagina midiendo
+          esta caja, así que el iframe hereda el ancho correcto. */}
+      <div
+        ref={containerRef}
+        className="mx-auto h-full"
+        style={{ maxWidth: `${settings.maxWidth}px` }}
+      />
+    </div>
+  );
 });
 
 export default EpubReader;

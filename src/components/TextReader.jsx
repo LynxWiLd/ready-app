@@ -283,7 +283,13 @@ const TextReader = forwardRef(function TextReader(
       <article
         ref={articleRef}
         className="reader-markdown mx-auto"
-        style={{ maxWidth: `${settings.maxWidth}px`, padding: `${settings.margin}px ${Math.max(settings.margin, 24)}px` }}
+        style={{
+          maxWidth: `${settings.maxWidth}px`,
+          padding: `${settings.margin}px`,
+          // En el artículo, no en el contenedor: .reader-markdown fija su
+          // propio interlineado y ganaba sobre el valor heredado.
+          lineHeight: settings.lineHeight
+        }}
         dangerouslySetInnerHTML={{ __html: html }}
       />
     </div>

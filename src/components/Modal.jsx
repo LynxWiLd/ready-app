@@ -8,7 +8,13 @@ export function Modal({ open, onClose, title, children, footer, size = 'md' }) {
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (e) => {
-      if (e.key === 'Escape') onClose?.();
+      if (e.key === 'Escape') {
+        // El modal consume el Escape: si no, el lector también lo recibe y
+        // sale del libro al cerrar el panel de ajustes.
+        e.stopPropagation();
+        e.preventDefault();
+        onClose?.();
+      }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);

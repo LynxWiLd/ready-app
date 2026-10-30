@@ -617,6 +617,7 @@ export function ReaderView() {
                   update={update}
                   reset={reset}
                   appSettings={false}
+                  format={book.format}
                 />
               </div>
             )}
