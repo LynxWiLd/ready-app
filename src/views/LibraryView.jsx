@@ -10,10 +10,20 @@ import { EmptyState, SectionHeader } from '../components/EmptyState.jsx';
 import { Brand, LibraryActions, StorageIndicator } from '../components/Navbar.jsx';
 import { ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { SettingsPanel } from '../components/SettingsPanel.jsx';
+import { PermissionsPanel } from '../components/PermissionsPanel.jsx';
 import { ToastContainer } from '../components/Toast.jsx';
 import { exportBackup, importBackup, downloadBlob } from '../services/backup.js';
 import { setBookCover, clearBookCover } from '../services/cover.js';
+import {
+  flushReminderSync,
+  loadReminderSettings,
+  maybeNotifyReminder,
+  registerPeriodicReminder
+} from '../services/reminders.js';
+import { isStandalone } from '../services/pwa.js';
 import { cn } from '../utils/cn.js';
+
+const PERMISSIONS_INTRO_KEY = 'ready.permissions.intro';
 
 export function LibraryView({ onOpenBook }) {
   const { books, loading, importing, refresh, importFile, removeBook } = useBooks();
@@ -25,6 +35,7 @@ export function LibraryView({ onOpenBook }) {
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState('recent');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [permissions, setPermissions] = useState({ open: false, intro: false });
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [restoring, setRestoring] = useState(false);
   const [dragActive, setDragActive] = useState(false);
@@ -76,6 +87,46 @@ export function LibraryView({ onOpenBook }) {
       window.removeEventListener('drop', onDrop);
     };
   }, [handleFiles]);
+
+  // ---------------- Recordatorios de lectura ----------------
+  useEffect(() => {
+    const check = () => maybeNotifyReminder().catch(() => {});
+    check();
+    if (loadReminderSettings().enabled) registerPeriodicReminder().catch(() => {});
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') check();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, []);
+
+  // Snapshot que lee el service worker para avisar en segundo plano.
+  useEffect(() => {
+    if (loading) return;
+    flushReminderSync().catch(() => {});
+  }, [books, loading]);
+
+  // La primera vez que se abre como app instalada explicamos los permisos.
+  useEffect(() => {
+    if (!isStandalone() || settingsOpen || permissions.open) return undefined;
+    try {
+      if (localStorage.getItem(PERMISSIONS_INTRO_KEY)) return undefined;
+    } catch {
+      return undefined;
+    }
+    const timer = setTimeout(() => setPermissions({ open: true, intro: true }), 900);
+    return () => clearTimeout(timer);
+  }, [settingsOpen, permissions.open]);
+
+  const closePermissions = useCallback(() => {
+    try {
+      localStorage.setItem(PERMISSIONS_INTRO_KEY, '1');
+    } catch {
+      /* almacenamiento no disponible */
+    }
+    setPermissions({ open: false, intro: false });
+  }, []);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -291,7 +342,25 @@ export function LibraryView({ onOpenBook }) {
         </div>
       )}
 
-      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} settings={settings} update={update} reset={reset} />
+      <SettingsPanel
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        settings={settings}
+        update={update}
+        reset={reset}
+        notify={{ success, error, info }}
+        onOpenPermissions={() => {
+          setSettingsOpen(false);
+          setPermissions({ open: true, intro: false });
+        }}
+      />
+
+      <PermissionsPanel
+        open={permissions.open}
+        intro={permissions.intro}
+        onClose={closePermissions}
+        onPickFiles={() => document.getElementById('library-picker')?.click()}
+      />
 
       <ConfirmDialog
         open={!!confirmDelete}

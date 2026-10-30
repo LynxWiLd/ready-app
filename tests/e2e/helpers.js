@@ -19,6 +19,9 @@ const READER_SETTINGS = {
 export async function preparePage(page) {
   await page.addInitScript((settings) => {
     localStorage.setItem('ready.reader.settings', JSON.stringify(settings));
+    // La presentación de permisos solo aparece en PWA instalada; en las
+    // pruebas la damos por vista para que nunca tape la interfaz.
+    localStorage.setItem('ready.permissions.intro', '1');
   }, READER_SETTINGS);
 }
 
@@ -27,9 +30,13 @@ export async function preparePage(page) {
  * Mientras `loading` es true, LibraryView monta el DropZone en otra rama del
  * árbol: al pasar a la biblioteca vacía React lo desmonta y remonta, así que
  * cargar archivos antes de tiempo se pierde en un nodo huérfano.
+ * El encabezado «Tus documentos, en tu dispositivo» también existe durante la
+ * carga; el estado vacío real es «Tu biblioteca está vacía».
  */
 export async function waitForLibrary(page) {
   await expect(page.getByText('Tus documentos, en tu dispositivo')).toBeVisible();
+  await expect(page.getByText('Tu biblioteca está vacía')).toBeVisible();
+  await expect(page.locator('#library-picker')).toBeAttached();
 }
 
 /** Importa uno o varios fixtures y espera a que aparezcan sus tarjetas. */
@@ -57,6 +64,8 @@ export async function openBook(page, { title, format } = {}) {
 
 /** Selecciona un texto dentro del artículo de TXT/Markdown. */
 export async function selectText(page, phrase) {
+  await expect(page.locator('article')).toContainText(phrase, { timeout: 20_000 });
+
   await page.evaluate((text) => {
     const root = document.querySelector('article');
     if (!root) throw new Error('No se encontró el artículo del lector.');

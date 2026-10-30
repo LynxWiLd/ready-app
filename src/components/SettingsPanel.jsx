@@ -1,5 +1,8 @@
-import { RotateCcw, Sun, Moon, BookOpen } from 'lucide-react';
+import { useState } from 'react';
+import { BookOpen, Moon, RefreshCw, RotateCcw, ShieldCheck, Sun } from 'lucide-react';
 import { Modal } from './Modal.jsx';
+import { RemindersSection } from './RemindersSection.jsx';
+import { APP_VERSION, BUILD_STAMP, checkForUpdate } from '../services/pwa.js';
 import { cn } from '../utils/cn.js';
 
 const THEMES = [
@@ -14,8 +17,36 @@ const FONTS = [
   { id: 'mono', label: 'Monospace', cls: 'font-mono' }
 ];
 
-export function SettingsPanel({ open, onClose, settings, update, reset }) {
+export function SettingsPanel({
+  open,
+  onClose,
+  settings,
+  update,
+  reset,
+  notify = {},
+  onOpenPermissions,
+  appSettings = true
+}) {
+  const [checking, setChecking] = useState(false);
   const set = (patch) => update(patch);
+
+  const checkUpdate = async () => {
+    setChecking(true);
+    try {
+      const result = await checkForUpdate();
+      if (result === 'available') {
+        notify.info?.('Hay una versión nueva: acepta el aviso para actualizar.');
+      } else if (result === 'current') {
+        notify.success?.('Ya tienes la última versión.');
+      } else if (result === 'unsupported') {
+        notify.info?.('Las actualizaciones se aplican al abrir la app instalada.');
+      } else {
+        notify.error?.('No se pudo comprobar la actualización.');
+      }
+    } finally {
+      setChecking(false);
+    }
+  };
 
   return (
     <Modal
@@ -116,6 +147,29 @@ export function SettingsPanel({ open, onClose, settings, update, reset }) {
           </div>
         </section>
 
+        {appSettings && (
+          <>
+            <RemindersSection notify={notify} />
+
+            <section className="border-t border-ink-100 pt-4">
+              <span className="label">Aplicación</span>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-ink-700">Ready {APP_VERSION}</p>
+                  <p className="text-xs text-ink-400">{buildLabel()}</p>
+                </div>
+                <button className="btn-outline" onClick={checkUpdate} disabled={checking}>
+                  <RefreshCw className={cn('h-4 w-4', checking && 'animate-spin')} />
+                  Buscar actualización
+                </button>
+              </div>
+              <button className="btn-ghost mt-2 w-full justify-start" onClick={onOpenPermissions}>
+                <ShieldCheck className="h-4 w-4" /> Permisos del dispositivo
+              </button>
+            </section>
+          </>
+        )}
+
         <p className="rounded-lg bg-ink-50 p-3 text-xs leading-relaxed text-ink-500">
           Los ajustes se guardan automáticamente en este navegador y se aplican a todos los libros.
         </p>
@@ -139,4 +193,18 @@ function Slider({ label, min, max, step, value, onChange }) {
       />
     </div>
   );
+}
+
+function buildLabel() {
+  if (!BUILD_STAMP) return 'Compilación local';
+  try {
+    const date = new Date(BUILD_STAMP);
+    return `Compilación del ${date.toLocaleDateString('es', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric'
+    })}`;
+  } catch {
+    return 'Compilación local';
+  }
 }

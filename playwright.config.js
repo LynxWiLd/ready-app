@@ -28,7 +28,9 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] }
+      // Chromium completo (no el headless shell): es el único que aplica
+      // grantPermissions(['notifications']) y permite probar los recordatorios.
+      use: { ...devices['Desktop Chrome'], channel: 'chromium' }
     }
   ]
 });

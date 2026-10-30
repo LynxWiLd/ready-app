@@ -1,6 +1,7 @@
 import { HashRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { LibraryView } from './views/LibraryView.jsx';
 import { ReaderView } from './views/ReaderView.jsx';
+import { UpdateBanner } from './components/UpdateBanner.jsx';
 
 function LibraryRoute() {
   const navigate = useNavigate();
@@ -20,6 +21,8 @@ export default function App() {
         <Route path="/read/:bookId" element={<ReaderView />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      {/* Vive fuera de las rutas para avisar también mientras se lee. */}
+      <UpdateBanner />
     </HashRouter>
   );
 }

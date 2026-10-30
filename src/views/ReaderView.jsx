@@ -12,6 +12,7 @@ import {
   Search
 } from 'lucide-react';
 import { getBook, getProgress, saveProgress as saveProgressDb, touchOpened } from '../services/db.js';
+import { scheduleReminderSync } from '../services/reminders.js';
 import {
   listBookmarks,
   addBookmark,
@@ -127,6 +128,8 @@ export function ReaderView() {
           scrollTop: loc.scrollTop ?? null,
           percent: loc.percent ?? 0
         });
+        // Mantiene al día el libro en curso para el recordatorio.
+        scheduleReminderSync();
       } catch {
         /* almacenamiento no disponible */
       }
@@ -613,6 +616,7 @@ export function ReaderView() {
                   settings={settings}
                   update={update}
                   reset={reset}
+                  appSettings={false}
                 />
               </div>
             )}
